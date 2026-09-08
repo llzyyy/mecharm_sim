@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="mecharm_pick_place">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 4 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground">
+      <static>true</static>
+      <link name="ground_link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>4 4</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>4 4</size></plane></geometry>
+          <material><diffuse>0.55 0.56 0.58 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="table">
+      <static>true</static>
+      <pose>0.20 0.05 0.30 0 0 0</pose>
+      <link name="table_link">
+        <collision name="table_top_collision">
+          <geometry><box><size>0.55 0.45 0.04</size></box></geometry>
+          <surface>
+            <friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>10</kd></ode></contact>
+          </surface>
+        </collision>
+        <visual name="table_top_visual">
+          <geometry><box><size>0.55 0.45 0.04</size></box></geometry>
+          <material><diffuse>0.42 0.44 0.40 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="target_ball">
+      <pose>0.22 -0.06 0.345 0 0 0</pose>
+      <link name="ball_link">
+        <inertial>
+          <mass>0.06</mass>
+          <inertia>
+            <ixx>0.0000024</ixx>
+            <iyy>0.0000024</iyy>
+            <izz>0.0000024</izz>
+          </inertia>
+        </inertial>
+        <collision name="ball_collision">
+          <geometry><sphere><radius>0.02</radius></sphere></geometry>
+          <surface>
+            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact>
+          </surface>
+        </collision>
+        <visual name="ball_visual">
+          <geometry><sphere><radius>0.02</radius></sphere></geometry>
+          <material><diffuse>0.95 0.10 0.08 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="place_marker">
+      <static>true</static>
+      <pose>0.18 0.16 0.326 0 0 0</pose>
+      <link name="marker_link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.04</radius><length>0.002</length></cylinder></geometry>
+          <material><diffuse>0.10 0.45 0.95 0.65</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
