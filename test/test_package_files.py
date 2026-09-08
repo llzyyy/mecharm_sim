@@ -1,4 +1,5 @@
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,27 @@ def test_required_files_exist():
     ]
     for relative_path in required:
         assert (ROOT / relative_path).exists(), relative_path
+
+
+def test_target_ball_is_dynamic_but_cannot_roll_on_table():
+    world = ET.parse(ROOT / "worlds/pick_place.sdf").getroot()
+    ball = world.find(".//model[@name='target_ball']")
+    table = world.find(".//model[@name='table']")
+
+    assert ball is not None
+    assert table is not None
+    assert ball.findtext("static", default="false") == "false"
+    assert float(ball.findtext("link/velocity_decay/angular")) >= 50.0
+    assert float(ball.findtext("link/collision/surface/friction/ode/mu")) >= 5.0
+    assert float(ball.findtext("link/collision/surface/friction/ode/mu2")) >= 5.0
+    support = ball.find("link/collision[@name='ball_support_collision']")
+    assert support is not None
+    assert float(support.findtext("geometry/cylinder/radius")) <= 0.005
+    assert ball.find("link/collision/geometry/sphere") is None
+    table_lock = table.find("plugin[child_model='target_ball']")
+    assert table_lock is not None
+    assert table_lock.findtext("attach_topic") == "/target_ball_table/attach"
+    assert table_lock.findtext("detach_topic") == "/target_ball_table/detach"
 
 
 def test_prepare_robot_releases_and_resets_ball_before_motion():
@@ -53,8 +75,18 @@ def test_moveit_grasp_is_checked_before_closing():
     alignment = method.index("self._ensure_grasp_alignment(ball_position)")
     close = method.index('self._move_gripper("closed", self.gripper_closed)')
     attach = method.index("self._set_detachable_joint(True)")
+    unlock = method.index("self._set_table_ball_lock(False)")
 
-    assert alignment < close < attach
+    assert alignment < close < attach < unlock
+
+
+def test_moveit_targets_real_gripper_center_and_locks_wrist():
+    source = (ROOT / "mecharm_sim/pick_place.py").read_text()
+
+    assert "constraint.target_point_offset.x" in source
+    assert "self._estimate_grasp_center_position()" in source
+    assert "request.path_constraints = self._wrist_constraints()" in source
+    assert "goal.joint_constraints = self._wrist_constraints().joint_constraints" in source
 
 
 def test_moveit_release_is_blocked_until_ball_reaches_plate():

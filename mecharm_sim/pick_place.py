@@ -25,6 +25,7 @@ class MoveItPosePlanner:
         from geometry_msgs.msg import PoseStamped
         from moveit_msgs.msg import (
             Constraints,
+            JointConstraint,
             MotionPlanRequest,
             OrientationConstraint,
             PositionConstraint,
@@ -36,6 +37,7 @@ class MoveItPosePlanner:
         self.node = node
         self.PoseStamped = PoseStamped
         self.Constraints = Constraints
+        self.JointConstraint = JointConstraint
         self.MotionPlanRequest = MotionPlanRequest
         self.OrientationConstraint = OrientationConstraint
         self.PositionConstraint = PositionConstraint
@@ -50,11 +52,27 @@ class MoveItPosePlanner:
         self.orientation_tolerance_rad = float(
             node.get_parameter("moveit.orientation_tolerance_rad").value
         )
+        self.target_point_offset = [
+            float(value)
+            for value in node.get_parameter("moveit.target_point_offset").value
+        ]
+        self.joint_names = list(node.get_parameter("joints").value)
+        self.wrist_joint_tolerances_rad = [
+            float(value)
+            for value in node.get_parameter(
+                "moveit.wrist_joint_tolerances_rad"
+            ).value
+        ]
+        if len(self.wrist_joint_tolerances_rad) != 3:
+            raise ValueError(
+                "moveit.wrist_joint_tolerances_rad must contain three values"
+            )
         self.planning_time_sec = float(node.get_parameter("moveit.planning_time_sec").value)
         self.planning_attempts = int(node.get_parameter("moveit.planning_attempts").value)
         self.velocity_scale = float(node.get_parameter("moveit.velocity_scale").value)
         self.acceleration_scale = float(node.get_parameter("moveit.acceleration_scale").value)
         self.target_orientation: Optional[List[float]] = None
+        self.target_wrist_positions: Optional[List[float]] = None
 
         self.plan_client = node.create_client(GetMotionPlan, "/plan_kinematic_path")
 
@@ -81,9 +99,13 @@ class MoveItPosePlanner:
 
     def clear_orientation_constraint(self) -> None:
         self.target_orientation = None
+        self.target_wrist_positions = None
 
-    def lock_orientation(self, quaternion: Sequence[float]) -> None:
+    def lock_tool_pose(
+        self, quaternion: Sequence[float], arm_positions: Sequence[float]
+    ) -> None:
         self.target_orientation = [float(value) for value in quaternion]
+        self.target_wrist_positions = [float(value) for value in arm_positions[-3:]]
 
     def _build_motion_plan_request(self, position: Sequence[float]):
         request = self.MotionPlanRequest()
@@ -95,6 +117,7 @@ class MoveItPosePlanner:
         request.start_state = self.RobotState()
         request.start_state.is_diff = True
         request.goal_constraints = [self._pose_goal(position)]
+        request.path_constraints = self._wrist_constraints()
         return request
 
     def _pose_goal(self, position: Sequence[float]):
@@ -112,6 +135,9 @@ class MoveItPosePlanner:
         constraint = self.PositionConstraint()
         constraint.header.frame_id = self.base_frame
         constraint.link_name = self.end_effector_link
+        constraint.target_point_offset.x = self.target_point_offset[0]
+        constraint.target_point_offset.y = self.target_point_offset[1]
+        constraint.target_point_offset.z = self.target_point_offset[2]
         constraint.constraint_region.primitives = [sphere]
         constraint.constraint_region.primitive_poses = [pose.pose]
         constraint.weight = 1.0
@@ -120,7 +146,26 @@ class MoveItPosePlanner:
         goal.position_constraints = [constraint]
         if self.target_orientation is not None:
             goal.orientation_constraints = [self._orientation_constraint()]
+        goal.joint_constraints = self._wrist_constraints().joint_constraints
         return goal
+
+    def _wrist_constraints(self):
+        constraints = self.Constraints()
+        if self.target_wrist_positions is None:
+            return constraints
+        for joint_name, position, tolerance in zip(
+            self.joint_names[-3:],
+            self.target_wrist_positions,
+            self.wrist_joint_tolerances_rad,
+        ):
+            joint = self.JointConstraint()
+            joint.joint_name = joint_name
+            joint.position = position
+            joint.tolerance_above = tolerance
+            joint.tolerance_below = tolerance
+            joint.weight = 1.0
+            constraints.joint_constraints.append(joint)
+        return constraints
 
     def _orientation_constraint(self):
         orientation = self.OrientationConstraint()
@@ -172,7 +217,7 @@ class PickPlaceNode(Node):
         self.declare_parameter("settle_time_sec", 0.7)
         self.declare_parameter("default_arm_duration_sec", 3.0)
         self.declare_parameter("default_gripper_duration_sec", 1.2)
-        self.declare_parameter("execution_tolerance_rad", 0.020)
+        self.declare_parameter("execution_tolerance_rad", 0.13)
         self.declare_parameter("arm_velocity_gain", 1.5)
         self.declare_parameter("arm_max_velocity_rad_sec", 0.45)
         self.declare_parameter("repeat_count", 1)
@@ -181,18 +226,21 @@ class PickPlaceNode(Node):
         self.declare_parameter("use_detachable_joint", True)
         self.declare_parameter("attach_topic", "/mecharm_gripper/attach")
         self.declare_parameter("detach_topic", "/mecharm_gripper/detach")
+        self.declare_parameter("lock_ball_on_table", True)
+        self.declare_parameter("table_lock_attach_topic", "/target_ball_table/attach")
+        self.declare_parameter("table_lock_detach_topic", "/target_ball_table/detach")
         self.declare_parameter("world_name", "mecharm_pick_place")
         self.declare_parameter("target_model", "target_ball")
         self.declare_parameter("grasp_link_name", "gripper_base")
         self.declare_parameter("robot_spawn_z", 0.34)
         self.declare_parameter("scene.ball_position", [0.22, -0.06, 0.345])
         self.declare_parameter("scene.reset_ball_each_attempt", True)
-        self.declare_parameter("scene.grasp_tolerance_m", 0.030)
+        self.declare_parameter("scene.grasp_tolerance_m", 0.012)
         self.declare_parameter("scene.grasp_xy_tolerance_m", 0.008)
         self.declare_parameter("scene.grasp_z_tolerance_m", 0.008)
         self.declare_parameter("scene.approach_height_m", 0.115)
-        self.declare_parameter("scene.grasp_height_offset_m", 0.020)
-        self.declare_parameter("scene.place_height_offset_m", 0.020)
+        self.declare_parameter("scene.grasp_center_height_offset_m", 0.0)
+        self.declare_parameter("scene.place_center_height_offset_m", 0.0)
         self.declare_parameter("scene.place_position", [0.18, 0.16, 0.345])
         self.declare_parameter("scene.release_tolerance_m", 0.012)
         self.declare_parameter("scene.max_place_corrections", 2)
@@ -206,11 +254,17 @@ class PickPlaceNode(Node):
         self.declare_parameter("moveit.end_effector_link", "gripper_base")
         self.declare_parameter("moveit.position_tolerance_m", 0.004)
         self.declare_parameter("moveit.orientation_tolerance_rad", 0.08)
+        self.declare_parameter("moveit.target_point_offset", [0.0, 0.057, 0.0])
+        self.declare_parameter(
+            "moveit.wrist_joint_tolerances_rad", [0.35, 0.90, 0.35]
+        )
         self.declare_parameter("moveit.planning_time_sec", 5.0)
         self.declare_parameter("moveit.planning_attempts", 10)
         self.declare_parameter("moveit.velocity_scale", 0.2)
         self.declare_parameter("moveit.acceleration_scale", 0.2)
         self.declare_parameter("moveit.execution_time_scale", 4.0)
+        self.declare_parameter("moveit.precise_position_tolerance_m", 0.008)
+        self.declare_parameter("moveit.precise_position_attempts", 3)
         self.declare_parameter(
             "joints",
             [
@@ -226,7 +280,7 @@ class PickPlaceNode(Node):
         for pose in self.ARM_POSES:
             self.declare_parameter(f"poses.{pose}", [0.0] * 6)
         self.declare_parameter("gripper.open", 0.10)
-        self.declare_parameter("gripper.closed", -0.55)
+        self.declare_parameter("gripper.closed", -0.14)
         self.declare_parameter("safety.joint_limits.joint1_to_base", [-2.792527, 2.792527])
         self.declare_parameter("safety.joint_limits.joint2_to_joint1", [-1.3089, 2.0943])
         self.declare_parameter("safety.joint_limits.joint3_to_joint2", [-3.0543, 1.1344])
@@ -251,6 +305,13 @@ class PickPlaceNode(Node):
         self.use_detachable_joint = bool(self.get_parameter("use_detachable_joint").value)
         self.attach_topic = str(self.get_parameter("attach_topic").value)
         self.detach_topic = str(self.get_parameter("detach_topic").value)
+        self.lock_ball_on_table = bool(self.get_parameter("lock_ball_on_table").value)
+        self.table_lock_attach_topic = str(
+            self.get_parameter("table_lock_attach_topic").value
+        )
+        self.table_lock_detach_topic = str(
+            self.get_parameter("table_lock_detach_topic").value
+        )
         self.world_name = str(self.get_parameter("world_name").value)
         self.target_model = str(self.get_parameter("target_model").value)
         self.grasp_link_name = str(self.get_parameter("grasp_link_name").value)
@@ -267,8 +328,15 @@ class PickPlaceNode(Node):
             self.get_parameter("scene.grasp_z_tolerance_m").value
         )
         self.approach_height_m = float(self.get_parameter("scene.approach_height_m").value)
-        self.grasp_height_offset_m = float(self.get_parameter("scene.grasp_height_offset_m").value)
-        self.place_height_offset_m = float(self.get_parameter("scene.place_height_offset_m").value)
+        self.grasp_center_height_offset_m = float(
+            self.get_parameter("scene.grasp_center_height_offset_m").value
+        )
+        self.place_center_height_offset_m = float(
+            self.get_parameter("scene.place_center_height_offset_m").value
+        )
+        self.grasp_center_offset = self._get_vector3_parameter(
+            "moveit.target_point_offset"
+        )
         self.place_position = self._get_vector3_parameter("scene.place_position")
         self.release_tolerance_m = float(
             self.get_parameter("scene.release_tolerance_m").value
@@ -282,6 +350,12 @@ class PickPlaceNode(Node):
         self.safe_height_m = float(self.get_parameter("safety.safe_height_m").value)
         self.max_joint_step_rad = float(self.get_parameter("safety.max_joint_step_rad").value)
         self.moveit_execution_time_scale = float(self.get_parameter("moveit.execution_time_scale").value)
+        self.moveit_precise_position_tolerance_m = float(
+            self.get_parameter("moveit.precise_position_tolerance_m").value
+        )
+        self.moveit_precise_position_attempts = int(
+            self.get_parameter("moveit.precise_position_attempts").value
+        )
         self.poses = {pose: self._get_pose(pose) for pose in self.ARM_POSES}
         self.gripper_open = float(self.get_parameter("gripper.open").value)
         self.gripper_closed = float(self.get_parameter("gripper.closed").value)
@@ -358,14 +432,15 @@ class PickPlaceNode(Node):
         self._move_arm("home", safe_move=True)
 
     def _prepare_robot(self) -> None:
-        # Gazebo's DetachableJoint starts attached.  Explicitly release it
-        # before moving the arm; otherwise the first attempt drags a ball that
-        # is still constrained by the table and the arm controller stalls.
+        # Both detachable joints start attached. Release them before resetting
+        # the ball, then lock only the table joint while the gripper approaches.
         self._set_detachable_joint(False)
+        self._set_table_ball_lock(False)
         self._settle()
         if self.reset_ball_each_attempt:
             self._set_model_pose(self.ball_position)
             self._settle()
+        self._set_table_ball_lock(True)
         self._move_gripper("open", self.gripper_open)
         self._move_arm("home")
 
@@ -373,19 +448,24 @@ class PickPlaceNode(Node):
         if self.use_moveit:
             ball_position = self._require_entity_position(self.target_model)
             above = self._offset_z(ball_position, self.approach_height_m)
-            grasp = self._offset_z(ball_position, self.grasp_height_offset_m)
-            self.moveit_planner.lock_orientation(
-                self._estimate_gripper_base_orientation(self.poses["a_pick"])
+            grasp = self._offset_z(
+                ball_position, self.grasp_center_height_offset_m
+            )
+            self.moveit_planner.lock_tool_pose(
+                self._estimate_gripper_base_orientation(self.poses["a_pick"]),
+                self.poses["a_pick"],
             )
             self._move_pose("ball_approach", above)
-            self._move_pose("ball_grasp", grasp)
+            self._move_pose_precisely("ball_grasp", grasp)
             self._ensure_grasp_alignment(ball_position)
         else:
             self._move_arm("a_above", safe_move=True)
             self._move_arm("a_pick")
         self._move_gripper("closed", self.gripper_closed)
-        self._ensure_ball_in_gripper()
+        # Transfer ownership without an unlocked interval in which contact can
+        # push the spherical target away from the gripper center.
         self._set_detachable_joint(True)
+        self._set_table_ball_lock(False)
         if self.use_moveit:
             self._move_pose("ball_lift", self._offset_z(ball_position, self.approach_height_m))
         else:
@@ -394,9 +474,12 @@ class PickPlaceNode(Node):
     def _place_ball(self) -> None:
         if self.use_moveit:
             above = self._offset_z(self.place_position, self.approach_height_m)
-            place = self._offset_z(self.place_position, self.place_height_offset_m)
-            self.moveit_planner.lock_orientation(
-                self._estimate_gripper_base_orientation(self.poses["b_place"])
+            place = self._offset_z(
+                self.place_position, self.place_center_height_offset_m
+            )
+            self.moveit_planner.lock_tool_pose(
+                self._estimate_gripper_base_orientation(self.poses["b_place"]),
+                self.poses["b_place"],
             )
             self._move_pose("place_approach", above)
             self._move_pose("place_release", place)
@@ -450,6 +533,23 @@ class PickPlaceNode(Node):
             raise RuntimeError("MoveIt planner is not initialized")
         trajectory = self.moveit_planner.plan_to(label, position)
         self._execute_planned_arm_trajectory(label, trajectory)
+
+    def _move_pose_precisely(self, label: str, position: Sequence[float]) -> None:
+        for attempt in range(1, self.moveit_precise_position_attempts + 1):
+            attempt_label = label if attempt == 1 else f"{label}_correction_{attempt - 1}"
+            self._move_pose(attempt_label, position)
+            measured = self._estimate_grasp_center_position()
+            error = self._distance(measured, position)
+            self.get_logger().info(
+                f"{label} Cartesian FK error {error:.3f} m after attempt "
+                f"{attempt}/{self.moveit_precise_position_attempts}"
+            )
+            if error <= self.moveit_precise_position_tolerance_m:
+                return
+        raise RuntimeError(
+            f"Unable to reach {label}: Cartesian FK error {error:.3f} m exceeds "
+            f"{self.moveit_precise_position_tolerance_m:.3f} m tolerance"
+        )
 
     def _execute_planned_arm_trajectory(self, label: str, trajectory: JointTrajectory) -> None:
         if not trajectory.points:
@@ -732,6 +832,16 @@ class PickPlaceNode(Node):
             return
         topic = self.attach_topic if attach else self.detach_topic
         action = "attach" if attach else "detach"
+        self._send_empty_transport_command(topic, action, self.target_model)
+
+    def _set_table_ball_lock(self, attach: bool) -> None:
+        if not self.lock_ball_on_table:
+            return
+        topic = self.table_lock_attach_topic if attach else self.table_lock_detach_topic
+        action = "lock" if attach else "unlock"
+        self._send_empty_transport_command(topic, action, f"{self.target_model} on table")
+
+    def _send_empty_transport_command(self, topic: str, action: str, subject: str) -> None:
         command = [
             "ign",
             "topic",
@@ -746,7 +856,7 @@ class PickPlaceNode(Node):
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
             stdout = completed.stdout.strip()
-            raise RuntimeError(f"Failed to {action} {self.target_model} via {topic}: {stderr or stdout}")
+            raise RuntimeError(f"Failed to {action} {subject} via {topic}: {stderr or stdout}")
         self.get_logger().info(f"Detachable joint {action} command sent on {topic}")
 
     def _ensure_ball_at_place(self) -> None:
@@ -782,26 +892,22 @@ class PickPlaceNode(Node):
             f"(error {error:.3f} m)"
         )
 
-    def _ensure_ball_in_gripper(self) -> None:
-        ball_position = self._read_entity_position(self.target_model)
-        if ball_position is None:
-            raise RuntimeError(f"Unable to read {self.target_model} pose before grasp")
-        self._ensure_grasp_alignment(ball_position)
-
     def _ensure_grasp_alignment(self, ball_position: Sequence[float]) -> None:
-        gripper_position = self._estimate_gripper_base_position()
-        distance = self._distance(ball_position, gripper_position)
-        xy_error = math.hypot(
-            float(ball_position[0]) - gripper_position[0],
-            float(ball_position[1]) - gripper_position[1],
+        grasp_center = self._estimate_grasp_center_position()
+        desired_center = self._offset_z(
+            ball_position, self.grasp_center_height_offset_m
         )
-        actual_height_offset = gripper_position[2] - float(ball_position[2])
-        z_error = abs(actual_height_offset - self.grasp_height_offset_m)
+        distance = self._distance(desired_center, grasp_center)
+        xy_error = math.hypot(
+            float(desired_center[0]) - grasp_center[0],
+            float(desired_center[1]) - grasp_center[1],
+        )
+        z_error = abs(float(desired_center[2]) - grasp_center[2])
         self.get_logger().info(
-            f"Pre-grasp alignment: distance={distance:.3f} m, "
+            f"Pre-grasp center alignment: distance={distance:.3f} m, "
             f"xy_error={xy_error:.3f} m, z_error={z_error:.3f} m; "
             f"{self.target_model}={self._format_xyz(ball_position)}, "
-            f"{self.grasp_link_name}={self._format_xyz(gripper_position)}"
+            f"grasp_center={self._format_xyz(grasp_center)}"
         )
         if (
             distance > self.grasp_tolerance_m
@@ -837,7 +943,7 @@ class PickPlaceNode(Node):
                     f"{self.release_tolerance_m:.3f} m release tolerance"
                 )
 
-            gripper_position = self._estimate_gripper_base_position()
+            gripper_position = self._estimate_grasp_center_position()
             corrected_target = [
                 gripper_position[index] + error[index] for index in range(3)
             ]
@@ -856,6 +962,17 @@ class PickPlaceNode(Node):
     def _estimate_gripper_base_position(self) -> List[float]:
         transform = self._estimate_gripper_base_transform(self.last_arm_goal)
         return [transform[0][3], transform[1][3], transform[2][3]]
+
+    def _estimate_grasp_center_position(self) -> List[float]:
+        transform = self._estimate_gripper_base_transform(self.last_arm_goal)
+        return [
+            transform[row][3]
+            + sum(
+                transform[row][column] * self.grasp_center_offset[column]
+                for column in range(3)
+            )
+            for row in range(3)
+        ]
 
     def _estimate_gripper_base_orientation(
         self, arm_positions: Optional[Sequence[float]] = None

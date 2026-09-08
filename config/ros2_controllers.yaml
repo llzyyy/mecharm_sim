@@ -37,5 +37,6 @@ gripper_action_controller:
       goal_time: 1.0
       stopped_velocity_tolerance: 0.02
       gripper_controller:
-        trajectory: 0.20
-        goal: 0.06
+        trajectory: 0.25
+        # Leave margin for the compliant coupled finger mechanism.
+        goal: 0.12

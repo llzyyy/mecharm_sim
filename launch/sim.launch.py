@@ -1,6 +1,6 @@
 import os
 
-from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable, TimerAction
 from launch.conditions import IfCondition
@@ -19,6 +19,7 @@ def generate_launch_description():
     poses = os.path.join(pkg_share, "config", "pick_place_poses.yaml")
     mycobot_description_share = get_package_share_directory("mycobot_description")
     gazebo_resource_path = os.path.dirname(mycobot_description_share)
+    gazebo_system_plugin_path = os.path.join(get_package_prefix("gz_ros2_control"), "lib")
 
     ros2_control_plugin = LaunchConfiguration("ros2_control_plugin")
     robot_base_z = LaunchConfiguration("robot_base_z")
@@ -115,6 +116,20 @@ def generate_launch_description():
         output="screen",
     )
 
+    detach_ball_on_spawn = ExecuteProcess(
+        cmd=[
+            "ign",
+            "topic",
+            "-t",
+            "/mecharm_gripper/detach",
+            "-m",
+            "ignition.msgs.Empty",
+            "-p",
+            "unused: true",
+        ],
+        output="screen",
+    )
+
     pick_place = ExecuteProcess(
         cmd=[
             "ros2",
@@ -137,6 +152,7 @@ def generate_launch_description():
         OnProcessExit(
             target_action=spawn_robot,
             on_exit=[
+                TimerAction(period=0.2, actions=[detach_ball_on_spawn]),
                 TimerAction(period=5.0, actions=[joint_state_spawner]),
                 TimerAction(period=6.0, actions=[arm_spawner]),
                 TimerAction(period=7.0, actions=[gripper_spawner]),
@@ -178,6 +194,22 @@ def generate_launch_description():
                     gazebo_resource_path,
                     ":",
                     EnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", default_value=""),
+                ],
+            ),
+            SetEnvironmentVariable(
+                name="IGN_GAZEBO_SYSTEM_PLUGIN_PATH",
+                value=[
+                    gazebo_system_plugin_path,
+                    ":",
+                    EnvironmentVariable("IGN_GAZEBO_SYSTEM_PLUGIN_PATH", default_value=""),
+                ],
+            ),
+            SetEnvironmentVariable(
+                name="GZ_SIM_SYSTEM_PLUGIN_PATH",
+                value=[
+                    gazebo_system_plugin_path,
+                    ":",
+                    EnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", default_value=""),
                 ],
             ),
             gz_launch,

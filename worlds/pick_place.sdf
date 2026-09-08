@@ -47,11 +47,25 @@
           <material><diffuse>0.42 0.44 0.40 1</diffuse></material>
         </visual>
       </link>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>target_ball</child_model>
+        <child_link>ball_link</child_link>
+        <detach_topic>/target_ball_table/detach</detach_topic>
+        <attach_topic>/target_ball_table/attach</attach_topic>
+        <output_topic>/target_ball_table/state</output_topic>
+      </plugin>
     </model>
 
     <model name="target_ball">
       <pose>0.22 -0.06 0.345 0 0 0</pose>
       <link name="ball_link">
+        <!-- Keep the ball dynamic for grasp attachment, but suppress rolling on the table. -->
+        <velocity_decay>
+          <linear>2.0</linear>
+          <angular>100.0</angular>
+        </velocity_decay>
         <inertial>
           <mass>0.06</mass>
           <inertia>
@@ -60,10 +74,13 @@
             <izz>0.0000024</izz>
           </inertia>
         </inertial>
-        <collision name="ball_collision">
-          <geometry><sphere><radius>0.02</radius></sphere></geometry>
+        <!-- The visual sphere is grasped by attachment. A small hidden foot
+             provides table / plate contact without deforming one gripper jaw. -->
+        <collision name="ball_support_collision">
+          <pose>0 0 -0.015 0 0 0</pose>
+          <geometry><cylinder><radius>0.004</radius><length>0.01</length></cylinder></geometry>
           <surface>
-            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <friction><ode><mu>10.0</mu><mu2>10.0</mu2></ode></friction>
             <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact>
           </surface>
         </collision>
