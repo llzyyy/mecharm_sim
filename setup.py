@@ -33,6 +33,9 @@ setup(
     entry_points={
         "console_scripts": [
             "pick_place = mecharm_sim.pick_place:main",
+            "fake_vision = mecharm_sim.fake_vision:main",
+            "classification_manager = mecharm_sim.classification_manager:main",
+            "classification_pick_place = mecharm_sim.classification_pick_place:main",
         ],
     },
 )

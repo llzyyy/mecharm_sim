@@ -1,0 +1,275 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="mecharm_classification_fake">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 4 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground">
+      <static>true</static>
+      <link name="ground_link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>4 4</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>4 4</size></plane></geometry>
+          <material><diffuse>0.55 0.56 0.58 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Fixed grasp-grid markers. Their centers match classification_fake.yaml. -->
+    <model name="grid_1">
+      <static>true</static><pose>0.12 -0.11 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="grid_2">
+      <static>true</static><pose>0.22 -0.11 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="grid_3">
+      <static>true</static><pose>0.32 -0.11 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="grid_4">
+      <static>true</static><pose>0.12 -0.04 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="grid_5">
+      <static>true</static><pose>0.22 -0.04 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="grid_6">
+      <static>true</static><pose>0.32 -0.04 0.321 0 0 0</pose>
+      <link name="marker_link"><visual name="visual">
+        <geometry><box><size>0.055 0.055 0.002</size></box></geometry>
+        <material><diffuse>0.12 0.55 0.95 0.65</diffuse></material>
+      </visual></link>
+    </model>
+
+    <model name="cube_bin">
+      <static>true</static><pose>0.12 0.15 0.321 0 0 0</pose>
+      <link name="bin_marker_link"><visual name="visual">
+        <geometry><box><size>0.13 0.12 0.002</size></box></geometry>
+        <material><diffuse>0.15 0.75 0.25 0.65</diffuse></material>
+      </visual></link>
+    </model>
+    <model name="cylinder_bin">
+      <static>true</static><pose>0.32 0.15 0.321 0 0 0</pose>
+      <link name="bin_marker_link"><visual name="visual">
+        <geometry><box><size>0.13 0.12 0.002</size></box></geometry>
+        <material><diffuse>0.95 0.55 0.10 0.65</diffuse></material>
+      </visual></link>
+    </model>
+
+    <model name="table">
+      <static>true</static>
+      <pose>0.20 0.03 0.30 0 0 0</pose>
+      <link name="table_link">
+        <collision name="table_top_collision">
+          <geometry><box><size>0.60 0.46 0.04</size></box></geometry>
+          <surface>
+            <friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>10</kd></ode></contact>
+          </surface>
+        </collision>
+        <visual name="table_top_visual">
+          <geometry><box><size>0.60 0.46 0.04</size></box></geometry>
+          <material><diffuse>0.42 0.44 0.40 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cube_1</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cube_1/table_attach</attach_topic>
+        <detach_topic>/classification/cube_1/table_detach</detach_topic>
+        <output_topic>/classification/cube_1/table_state</output_topic>
+      </plugin>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cylinder_1</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cylinder_1/table_attach</attach_topic>
+        <detach_topic>/classification/cylinder_1/table_detach</detach_topic>
+        <output_topic>/classification/cylinder_1/table_state</output_topic>
+      </plugin>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cube_2</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cube_2/table_attach</attach_topic>
+        <detach_topic>/classification/cube_2/table_detach</detach_topic>
+        <output_topic>/classification/cube_2/table_state</output_topic>
+      </plugin>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cylinder_2</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cylinder_2/table_attach</attach_topic>
+        <detach_topic>/classification/cylinder_2/table_detach</detach_topic>
+        <output_topic>/classification/cylinder_2/table_state</output_topic>
+      </plugin>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cube_3</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cube_3/table_attach</attach_topic>
+        <detach_topic>/classification/cube_3/table_detach</detach_topic>
+        <output_topic>/classification/cube_3/table_state</output_topic>
+      </plugin>
+      <plugin filename="ignition-gazebo-detachable-joint-system"
+              name="ignition::gazebo::systems::DetachableJoint">
+        <parent_link>table_link</parent_link>
+        <child_model>cylinder_3</child_model>
+        <child_link>object_link</child_link>
+        <attach_topic>/classification/cylinder_3/table_attach</attach_topic>
+        <detach_topic>/classification/cylinder_3/table_detach</detach_topic>
+        <output_topic>/classification/cylinder_3/table_state</output_topic>
+      </plugin>
+    </model>
+
+    <model name="cube_1">
+      <pose>0.12 -0.11 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000016</ixx><iyy>0.000016</iyy><izz>0.000016</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><diffuse>0.12 0.75 0.22 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cube_2">
+      <pose>0.32 -0.11 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000016</ixx><iyy>0.000016</iyy><izz>0.000016</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><diffuse>0.12 0.75 0.22 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cube_3">
+      <pose>0.22 -0.04 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000016</ixx><iyy>0.000016</iyy><izz>0.000016</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><diffuse>0.12 0.75 0.22 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cylinder_1">
+      <pose>0.22 -0.11 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000014</ixx><iyy>0.000014</iyy><izz>0.000012</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <material><diffuse>0.95 0.52 0.08 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cylinder_2">
+      <pose>0.12 -0.04 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000014</ixx><iyy>0.000014</iyy><izz>0.000012</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <material><diffuse>0.95 0.52 0.08 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cylinder_3">
+      <pose>0.32 -0.04 0.34 0 0 0</pose>
+      <link name="object_link">
+        <velocity_decay><linear>2.0</linear><angular>20.0</angular></velocity_decay>
+        <inertial><mass>0.06</mass><inertia>
+          <ixx>0.000014</ixx><iyy>0.000014</iyy><izz>0.000012</izz>
+        </inertia></inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <surface><friction><ode><mu>2.0</mu><mu2>2.0</mu2></ode></friction>
+            <contact><ode><kp>1000000</kp><kd>20</kd></ode></contact></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          <material><diffuse>0.95 0.52 0.08 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
