@@ -1,0 +1,24 @@
+# Parameters used in the RoboMaster fixed-point grasping experiment
+
+controller:
+  command_timeout: 15.0
+
+bridge:
+  status_port: 5005
+  command_port: 5006
+  windows_address: "127.0.0.1"
+
+robot:
+  arm_down_y: -100
+  arm_up_y: 100
+
+  rotate_speed_z: 120
+  rotate_duration: 0.6
+
+  gripper_open_wait: 1.0
+  gripper_close_wait: 0.5
+  arm_down_wait: 1.0
+  arm_up_wait: 1.5
+  rotate_stop_wait: 1.0
+
+  arm_position_frequency: 5
