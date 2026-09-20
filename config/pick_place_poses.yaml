@@ -71,7 +71,7 @@ mecharm_sim:
       position_tolerance_m: 0.004
       orientation_tolerance_rad: 0.08
       # The adaptive gripper finger center is 57 mm along gripper_base +Y.
-      target_point_offset: [0.0, 0.057, 0.0]
+      target_point_offset: [0.00, 0.057, 0.0]
       # Keep roll/yaw near calibration; allow joint 5 to pitch the gripper down.
       wrist_joint_tolerances_rad: [0.35, 0.90, 0.35]
       planning_time_sec: 8.0

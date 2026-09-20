@@ -45,6 +45,12 @@ class ClassificationManager(Node):
         self.detection_timeout_sec = float(manager_config.get("detection_timeout_sec", 5.0))
         self.command_timeout_sec = float(manager_config.get("command_timeout_sec", 180.0))
         self.max_attempts = int(manager_config.get("max_attempts_per_target", 1))
+        self.non_retryable_error_codes = {
+            str(value)
+            for value in manager_config.get(
+                "non_retryable_error_codes", ["alignment_failed"]
+            )
+        }
         self.target_order = [str(value) for value in manager_config["target_order"]]
         self.result_log = Path(
             str(manager_config.get("result_log", "~/.ros/mecharm_sim/classification_manager.jsonl"))
@@ -141,7 +147,10 @@ class ClassificationManager(Node):
         else:
             error_code = str(result.get("error_code") or "pick_failed")
             reason = str(result.get("reason") or "controller reported failure")
-            if self.attempts.get(grid_id, 0) >= self.max_attempts:
+            if (
+                error_code in self.non_retryable_error_codes
+                or self.attempts.get(grid_id, 0) >= self.max_attempts
+            ):
                 self.processed_grids.add(grid_id)
             self._record(error_code, reason, self.current)
             self.get_logger().error(f"{error_code}: {reason}")
@@ -318,7 +327,8 @@ def main(args=None) -> None:
         rclpy.spin(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

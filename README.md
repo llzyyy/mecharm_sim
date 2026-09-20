@@ -51,6 +51,54 @@ The pick-and-place node writes results to:
 
 Each successful run means the robot trajectory completed, the grasp assist command completed, and the ball pose was verified within `scene.placement_tolerance_m` of `scene.place_position`.
 
+## Six-Object Classification
+
+The classification scene contains three cubes and three cylinders on six grid
+positions. The manager processes `grid_1` through `grid_6`, sends cubes to
+`cube_bin`, sends cylinders to `cylinder_bin`, and uses three non-overlapping
+drop slots in each bin.
+
+Build and launch the complete task with:
+
+```bash
+cd /mnt/textop_big/mecharm
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select mecharm_sim
+source install/setup.bash
+ros2 launch mecharm_sim classification_fake.launch.py
+```
+
+Classification parameters live in `config/classification_fake.yaml`:
+
+- `manager.target_order` must contain all six grids for a complete run.
+- `manager.max_attempts_per_target` allows one retry for a transient planning
+  or controller miss before a grid is marked failed.
+- `grids.<grid_id>.world_position` is the perceived object-centre coordinate.
+- `grids.<grid_id>.grasp_target_offset` calibrates only the commanded grasp
+  path; it does not alter the object pose reported by perception.
+- `grid_5` uses `[-0.003, -0.020, -0.0025]` m, calibrated from the visible
+  finger centre of the second-to-last pick.
+- `grid_6` uses `[-0.003, 0.000, -0.003]` m, compensating the measured final
+  grid residual in the same way as `grid_5`.
+- `moveit.precise_joint_tolerance_rad` refines the final grasp joint target
+  after the coarse trajectory completes. The measured Cartesian tolerance
+  remains the final authority for allowing the gripper to close.
+- Low-height joint refinement is capped by `moveit.precise_joint_timeout_sec`.
+  A missed alignment retreats by `moveit.precise_retry_retreat_m` before the
+  next descent, instead of continuing to load the fingers near the table.
+- `alignment_failed` is non-retryable by the manager: the target is skipped
+  after safe recovery so physical contact is not repeated automatically.
+
+The expected completion message is:
+
+```text
+Classification finished: 6 successful, 0 skipped/failed
+```
+
+Per-command results are written to
+`~/.ros/mecharm_sim/classification_results.csv`, while manager events are
+written to `~/.ros/mecharm_sim/classification_manager.jsonl`.
+
 ## Motion-Only Check
 
 Use this when debugging controller startup without executing the pick-and-place sequence:

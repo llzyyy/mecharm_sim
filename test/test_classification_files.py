@@ -55,6 +55,33 @@ def test_configuration_has_six_unique_targets_and_two_class_bins():
     assert config["bins"]["cylinder_bin"]["class_name"] == "cylinder"
 
 
+def test_optional_grid_grasp_offsets_have_three_numeric_components():
+    config = _config()
+    for grid in config["grids"].values():
+        offset = grid.get("grasp_target_offset", [0.0, 0.0, 0.0])
+        assert len(offset) == 3
+        assert all(isinstance(value, (int, float)) for value in offset)
+
+
+def test_all_grids_have_calibrated_six_joint_grasp_targets():
+    config = _config()
+    for grid in config["grids"].values():
+        target = grid["grasp_joint_target"]
+        assert len(target) == 6
+        assert all(isinstance(value, (int, float)) for value in target)
+
+
+def test_classification_pick_uses_per_grid_grasp_offset():
+    source = (
+        ROOT / "mecharm_sim" / "classification_pick_place.py"
+    ).read_text(encoding="utf-8")
+    method = source.split("    def pick_object(", 1)[1].split("\n    def ", 1)[0]
+    assert '"grasp_target_offset"' in method
+    assert "above = add_vectors(" in method
+    assert "grasp = add_vectors(" in method
+    assert "add_vectors(measured_position, grasp_target_offset)" in method
+
+
 def test_world_models_and_positions_match_configuration():
     config = _config()
     world = ET.parse(ROOT / "worlds" / "classification_fake.sdf").getroot()
@@ -126,6 +153,35 @@ def test_manager_and_controller_contract_is_present():
         assert state in manager
     for method in ("pick_object", "place_object", "return_home"):
         assert f"def {method}" in controller
+
+
+def test_failed_grasp_alignment_retreats_and_is_not_retried():
+    config = _config()
+    assert "alignment_failed" in config["manager"]["non_retryable_error_codes"]
+    assert config["controller"]["moveit"]["precise_joint_timeout_sec"] < config["controller"]["action_timeout_sec"]
+    assert config["controller"]["moveit"]["precise_max_velocity_rad_sec"] < config["controller"]["arm_max_velocity_rad_sec"]
+    assert 0.0 < config["controller"]["moveit"]["calibrated_joint_tolerance_rad"] < 0.01
+    assert config["controller"]["moveit"]["precise_retry_retreat_m"] > 0.0
+    assert config["controller"]["moveit"]["precise_position_tolerance_m"] == config["controller"]["scene"]["grasp_tolerance_m"]
+    assert config["controller"]["moveit"]["grasp_plan_candidates"] >= 2
+    assert 0.0 < config["controller"]["moveit"]["max_grasp_joint_step_rad"] <= 1.0
+    assert config["controller"]["initialization_action_timeout_sec"] > config["controller"]["action_timeout_sec"]
+
+    controller = (
+        ROOT / "mecharm_sim" / "classification_pick_place.py"
+    ).read_text(encoding="utf-8")
+    manager = (ROOT / "mecharm_sim" / "classification_manager.py").read_text(
+        encoding="utf-8"
+    )
+    motion = (ROOT / "mecharm_sim" / "pick_place.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'return "alignment_failed"' in controller
+    assert "error_code in self.non_retryable_error_codes" in manager
+    assert "self.moveit_precise_retry_retreat_m" in motion
+    assert "self.moveit_precise_joint_timeout_sec" in motion
+    assert "cartesian_xy_tolerance_m=self.grasp_xy_tolerance_m" in motion
+    assert "cartesian_z_tolerance_m=self.grasp_z_tolerance_m" in motion
 
 
 def test_packaging_keeps_original_entrypoint_and_adds_classification_entries():

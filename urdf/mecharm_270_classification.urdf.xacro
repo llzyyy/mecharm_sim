@@ -12,13 +12,13 @@
     </inertial>
   </xacro:macro>
 
-  <xacro:macro name="gazebo_link" params="link mu1:=0.8 mu2:=0.8">
+  <xacro:macro name="gazebo_link" params="link mu1:=0.8 mu2:=0.8 kp:=1000000.0 kd:=10.0">
     <gazebo reference="${link}">
       <gravity>false</gravity>
       <mu1>${mu1}</mu1>
       <mu2>${mu2}</mu2>
-      <kp>1000000.0</kp>
-      <kd>10.0</kd>
+      <kp>${kp}</kp>
+      <kd>${kd}</kd>
       <self_collide>false</self_collide>
     </gazebo>
   </xacro:macro>
@@ -214,8 +214,8 @@
 
   <joint name="gripper_controller" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.74" upper="0.15" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.74" upper="0.15" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_base"/>
     <child link="gripper_left3"/>
     <origin xyz="-0.012 0.005 0" rpy="0 0 0"/>
@@ -223,8 +223,8 @@
 
   <joint name="gripper_base_to_gripper_left2" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.8" upper="0.5" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.8" upper="0.5" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_base"/>
     <child link="gripper_left2"/>
     <origin xyz="-0.005 0.027 0" rpy="0 0 0"/>
@@ -233,8 +233,8 @@
 
   <joint name="gripper_left3_to_gripper_left1" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.5" upper="0.5" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.5" upper="0.5" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_left3"/>
     <child link="gripper_left1"/>
     <origin xyz="-0.027 0.016 0" rpy="0 0 0"/>
@@ -243,8 +243,8 @@
 
   <joint name="gripper_base_to_gripper_right3" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.15" upper="0.7" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.15" upper="0.7" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_base"/>
     <child link="gripper_right3"/>
     <origin xyz="0.012 0.005 0" rpy="0 0 0"/>
@@ -253,8 +253,8 @@
 
   <joint name="gripper_base_to_gripper_right2" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.5" upper="0.8" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.5" upper="0.8" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_base"/>
     <child link="gripper_right2"/>
     <origin xyz="0.005 0.027 0" rpy="0 0 0"/>
@@ -263,8 +263,8 @@
 
   <joint name="gripper_right3_to_gripper_right1" type="revolute">
     <axis xyz="0 0 1"/>
-    <limit effort="2.0" lower="-0.5" upper="0.5" velocity="1.0"/>
-    <dynamics damping="0.02" friction="0.01"/>
+    <limit effort="0.6" lower="-0.5" upper="0.5" velocity="0.4"/>
+    <dynamics damping="0.08" friction="0.02"/>
     <parent link="gripper_right3"/>
     <child link="gripper_right1"/>
     <origin xyz="0.027 0.016 0" rpy="0 0 0"/>
@@ -279,12 +279,14 @@
   <xacro:gazebo_link link="link5"/>
   <xacro:gazebo_link link="link6"/>
   <xacro:gazebo_link link="gripper_base" mu1="1.2" mu2="1.2"/>
-  <xacro:gazebo_link link="gripper_left1" mu1="1.4" mu2="1.4"/>
-  <xacro:gazebo_link link="gripper_left2" mu1="1.4" mu2="1.4"/>
-  <xacro:gazebo_link link="gripper_left3" mu1="1.4" mu2="1.4"/>
-  <xacro:gazebo_link link="gripper_right1" mu1="1.4" mu2="1.4"/>
-  <xacro:gazebo_link link="gripper_right2" mu1="1.4" mu2="1.4"/>
-  <xacro:gazebo_link link="gripper_right3" mu1="1.4" mu2="1.4"/>
+  <!-- The detachable joint carries the object after contact.  A softer contact
+       and moderate friction avoid wedging the small object between mesh links. -->
+  <xacro:gazebo_link link="gripper_left1" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
+  <xacro:gazebo_link link="gripper_left2" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
+  <xacro:gazebo_link link="gripper_left3" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
+  <xacro:gazebo_link link="gripper_right1" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
+  <xacro:gazebo_link link="gripper_right2" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
+  <xacro:gazebo_link link="gripper_right3" mu1="0.9" mu2="0.9" kp="200000.0" kd="20.0"/>
 
   <ros2_control name="mecharm_270_system" type="system">
     <hardware>
@@ -388,4 +390,3 @@
     </plugin>
   </gazebo>
 </robot>
-

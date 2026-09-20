@@ -63,7 +63,8 @@ def test_moveit_execution_tracks_full_trajectory():
     follow_method = follow_method.split("\n    def ", 1)[0]
 
     assert "if len(trajectory.points) > 1:" in publish_method
-    assert "self._follow_arm_trajectory(trajectory)" in publish_method
+    assert "self._follow_arm_trajectory(" in publish_method
+    assert "trajectory," in publish_method
     assert "for point in trajectory.points:" in follow_method
 
 
@@ -87,6 +88,34 @@ def test_moveit_targets_real_gripper_center_and_locks_wrist():
     assert "self._estimate_grasp_center_position()" in source
     assert "request.path_constraints = self._wrist_constraints()" in source
     assert "goal.joint_constraints = self._wrist_constraints().joint_constraints" in source
+
+
+def test_precise_grasp_selects_safe_candidates_and_replans_stalled_descents():
+    source = (ROOT / "mecharm_sim/pick_place.py").read_text()
+    method = source.split("    def _move_pose_precisely(", 1)[1]
+    method = method.split("\n    def ", 1)[0]
+
+    assert "candidate_count=self.moveit_grasp_plan_candidates" in method
+    assert "max_joint_step_rad=self.moveit_max_grasp_joint_step_rad" in method
+    assert "except (RuntimeError, TimeoutError)" in method
+    assert "replanning after retreat" in method
+    assert "calibrated_joint_target" in method
+    assert "self._move_joint_target(" in method
+
+
+def test_low_grasp_completion_uses_short_timeout_not_global_action_timeout():
+    source = (ROOT / "mecharm_sim/pick_place.py").read_text()
+    method = source.split("    def _move_pose_precisely(", 1)[1]
+    method = method.split("\n    def ", 1)[0]
+
+    assert "completion_timeout_sec=self.moveit_precise_joint_timeout_sec" in method
+    assert "completion_max_velocity_rad_sec=self.moveit_precise_max_velocity" in method
+    assert "cartesian_target=position" in method
+
+    drive = source.split("    def _drive_arm_to(", 1)[1]
+    drive = drive.split("\n    def ", 1)[0]
+    assert "cartesian_target is None" in drive
+    assert "min(self.arm_max_velocity, float(max_velocity_rad_sec))" in drive
 
 
 def test_moveit_release_is_blocked_until_ball_reaches_plate():

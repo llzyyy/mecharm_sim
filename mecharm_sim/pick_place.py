@@ -71,6 +71,9 @@ class MoveItPosePlanner:
         self.planning_attempts = int(node.get_parameter("moveit.planning_attempts").value)
         self.velocity_scale = float(node.get_parameter("moveit.velocity_scale").value)
         self.acceleration_scale = float(node.get_parameter("moveit.acceleration_scale").value)
+        self.calibrated_joint_tolerance_rad = float(
+            node.get_parameter("moveit.calibrated_joint_tolerance_rad").value
+        )
         self.target_orientation: Optional[List[float]] = None
         self.target_wrist_positions: Optional[List[float]] = None
 
@@ -82,20 +85,147 @@ class MoveItPosePlanner:
             self.node.get_logger().error("Missing MoveIt service: /plan_kinematic_path")
         return plan_ready
 
-    def plan_to(self, label: str, position: Sequence[float]) -> JointTrajectory:
+    def plan_to(
+        self,
+        label: str,
+        position: Sequence[float],
+        *,
+        candidate_count: int = 1,
+        start_positions: Optional[Sequence[float]] = None,
+        max_joint_step_rad: Optional[float] = None,
+    ) -> JointTrajectory:
+        candidate_count = max(1, int(candidate_count))
+        candidates = []
+        errors = []
+        for candidate_index in range(1, candidate_count + 1):
+            try:
+                trajectory = self._request_plan(position)
+            except Exception as exc:
+                errors.append(str(exc))
+                self.node.get_logger().warning(
+                    f"MoveIt candidate {candidate_index}/{candidate_count} for {label} "
+                    f"failed: {exc}"
+                )
+                continue
+
+            score, max_step = self._trajectory_score(trajectory, start_positions)
+            if max_joint_step_rad is not None and max_step > max_joint_step_rad:
+                errors.append(
+                    f"candidate {candidate_index} joint step {max_step:.3f} rad exceeds "
+                    f"{max_joint_step_rad:.3f} rad"
+                )
+                self.node.get_logger().warning(
+                    f"Rejecting MoveIt candidate {candidate_index}/{candidate_count} "
+                    f"for {label}: joint step {max_step:.3f} rad exceeds "
+                    f"{max_joint_step_rad:.3f} rad"
+                )
+                continue
+            candidates.append((score, candidate_index, max_step, trajectory))
+
+        if not candidates:
+            detail = "; ".join(errors) if errors else "no candidate trajectory returned"
+            raise RuntimeError(f"MoveIt found no safe plan for {label}: {detail}")
+
+        score, candidate_index, max_step, trajectory = min(
+            candidates, key=lambda item: item[0]
+        )
+        if candidate_count > 1:
+            self.node.get_logger().info(
+                f"Selected MoveIt candidate {candidate_index}/{candidate_count} for {label}: "
+                f"score={score:.3f}, max_joint_step={max_step:.3f} rad"
+            )
+        self.node.get_logger().info(
+            f"MoveIt planned {label} to ({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})"
+        )
+        return trajectory
+
+    def _request_plan(self, position: Sequence[float]) -> JointTrajectory:
         request = self.GetMotionPlan.Request()
         request.motion_plan_request = self._build_motion_plan_request(position)
 
         future = self.plan_client.call_async(request)
-        self._spin_future(future, f"plan {label}")
+        self._spin_future(future, "plan pose")
         response = future.result().motion_plan_response
         if response.error_code.val != MOVEIT_SUCCESS:
-            raise RuntimeError(f"MoveIt failed to plan {label}: error_code={response.error_code.val}")
+            raise RuntimeError(
+                f"MoveIt failed to plan pose: error_code={response.error_code.val}"
+            )
+        return response.trajectory.joint_trajectory
 
+    def plan_to_joints(
+        self, label: str, target_positions: Sequence[float]
+    ) -> JointTrajectory:
+        if len(target_positions) != len(self.joint_names):
+            raise ValueError(
+                f"{label} joint target has {len(target_positions)} values; "
+                f"expected {len(self.joint_names)}"
+            )
+        request = self.MotionPlanRequest()
+        request.group_name = self.group_name
+        request.num_planning_attempts = self.planning_attempts
+        request.allowed_planning_time = self.planning_time_sec
+        request.max_velocity_scaling_factor = self.velocity_scale
+        request.max_acceleration_scaling_factor = self.acceleration_scale
+        request.start_state = self.RobotState()
+        request.start_state.is_diff = True
+
+        goal = self.Constraints()
+        for joint_name, position in zip(self.joint_names, target_positions):
+            joint = self.JointConstraint()
+            joint.joint_name = joint_name
+            joint.position = float(position)
+            joint.tolerance_above = self.calibrated_joint_tolerance_rad
+            joint.tolerance_below = self.calibrated_joint_tolerance_rad
+            joint.weight = 1.0
+            goal.joint_constraints.append(joint)
+        request.goal_constraints = [goal]
+        request.path_constraints = self._wrist_constraints()
+
+        service_request = self.GetMotionPlan.Request()
+        service_request.motion_plan_request = request
+        future = self.plan_client.call_async(service_request)
+        self._spin_future(future, f"plan calibrated {label}")
+        response = future.result().motion_plan_response
+        if response.error_code.val != MOVEIT_SUCCESS:
+            raise RuntimeError(
+                f"MoveIt failed to plan calibrated {label}: "
+                f"error_code={response.error_code.val}"
+            )
         self.node.get_logger().info(
-            f"MoveIt planned {label} to ({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})"
+            f"MoveIt planned calibrated joint target for {label}"
         )
         return response.trajectory.joint_trajectory
+
+    def _trajectory_score(
+        self,
+        trajectory: JointTrajectory,
+        start_positions: Optional[Sequence[float]],
+    ) -> tuple:
+        if not trajectory.points:
+            return float("inf"), float("inf")
+        final_by_name = dict(
+            zip(trajectory.joint_names, trajectory.points[-1].positions)
+        )
+        final_positions = [float(final_by_name[name]) for name in self.joint_names]
+        if start_positions is None:
+            start_positions = final_positions
+        deltas = [
+            abs(target - start)
+            for target, start in zip(final_positions, start_positions)
+        ]
+        max_step = max(deltas, default=0.0)
+        # Prefer compact IK branches.  Bias the redundant wrist joints toward
+        # the calibrated tool pose, since large wrist excursions are the plans
+        # most likely to contact the table before the Cartesian goal is reached.
+        wrist_error = 0.0
+        if self.target_wrist_positions is not None:
+            wrist_error = sum(
+                abs(target - preferred)
+                for target, preferred in zip(
+                    final_positions[-3:], self.target_wrist_positions
+                )
+            )
+        return 3.0 * max_step + sum(deltas) + wrist_error, max_step
 
     def clear_orientation_constraint(self) -> None:
         self.target_orientation = None
@@ -214,6 +344,7 @@ class PickPlaceNode(Node):
         self.declare_parameter("gripper_controller_name", "gripper_action_controller")
         self.declare_parameter("result_log", "~/.ros/mecharm_sim/pick_place_results.csv")
         self.declare_parameter("action_timeout_sec", 20.0)
+        self.declare_parameter("initialization_action_timeout_sec", 35.0)
         self.declare_parameter("settle_time_sec", 0.7)
         self.declare_parameter("default_arm_duration_sec", 3.0)
         self.declare_parameter("default_gripper_duration_sec", 1.2)
@@ -265,6 +396,13 @@ class PickPlaceNode(Node):
         self.declare_parameter("moveit.execution_time_scale", 4.0)
         self.declare_parameter("moveit.precise_position_tolerance_m", 0.008)
         self.declare_parameter("moveit.precise_position_attempts", 3)
+        self.declare_parameter("moveit.precise_joint_tolerance_rad", 0.05)
+        self.declare_parameter("moveit.precise_joint_timeout_sec", 3.0)
+        self.declare_parameter("moveit.precise_max_velocity_rad_sec", 0.12)
+        self.declare_parameter("moveit.calibrated_joint_tolerance_rad", 0.003)
+        self.declare_parameter("moveit.precise_retry_retreat_m", 0.09)
+        self.declare_parameter("moveit.grasp_plan_candidates", 3)
+        self.declare_parameter("moveit.max_grasp_joint_step_rad", 1.0)
         self.declare_parameter(
             "joints",
             [
@@ -293,6 +431,9 @@ class PickPlaceNode(Node):
         self.arm_controller_name = self.get_parameter("arm_controller_name").value
         self.gripper_controller_name = self.get_parameter("gripper_controller_name").value
         self.action_timeout_sec = float(self.get_parameter("action_timeout_sec").value)
+        self.initialization_action_timeout_sec = float(
+            self.get_parameter("initialization_action_timeout_sec").value
+        )
         self.settle_time_sec = float(self.get_parameter("settle_time_sec").value)
         self.arm_duration_sec = float(self.get_parameter("default_arm_duration_sec").value)
         self.gripper_duration_sec = float(self.get_parameter("default_gripper_duration_sec").value)
@@ -355,6 +496,24 @@ class PickPlaceNode(Node):
         )
         self.moveit_precise_position_attempts = int(
             self.get_parameter("moveit.precise_position_attempts").value
+        )
+        self.moveit_precise_joint_tolerance_rad = float(
+            self.get_parameter("moveit.precise_joint_tolerance_rad").value
+        )
+        self.moveit_precise_joint_timeout_sec = float(
+            self.get_parameter("moveit.precise_joint_timeout_sec").value
+        )
+        self.moveit_precise_max_velocity = float(
+            self.get_parameter("moveit.precise_max_velocity_rad_sec").value
+        )
+        self.moveit_precise_retry_retreat_m = float(
+            self.get_parameter("moveit.precise_retry_retreat_m").value
+        )
+        self.moveit_grasp_plan_candidates = int(
+            self.get_parameter("moveit.grasp_plan_candidates").value
+        )
+        self.moveit_max_grasp_joint_step_rad = float(
+            self.get_parameter("moveit.max_grasp_joint_step_rad").value
         )
         self.poses = {pose: self._get_pose(pose) for pose in self.ARM_POSES}
         self.gripper_open = float(self.get_parameter("gripper.open").value)
@@ -528,35 +687,149 @@ class PickPlaceNode(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         return False
 
-    def _move_pose(self, label: str, position: Sequence[float]) -> None:
+    def _move_pose(
+        self,
+        label: str,
+        position: Sequence[float],
+        *,
+        candidate_count: int = 1,
+        max_joint_step_rad: Optional[float] = None,
+        completion_timeout_sec: Optional[float] = None,
+        completion_tolerance_rad: Optional[float] = None,
+        completion_max_velocity_rad_sec: Optional[float] = None,
+        cartesian_target: Optional[Sequence[float]] = None,
+    ) -> List[float]:
         if self.moveit_planner is None:
             raise RuntimeError("MoveIt planner is not initialized")
-        trajectory = self.moveit_planner.plan_to(label, position)
-        self._execute_planned_arm_trajectory(label, trajectory)
+        trajectory = self.moveit_planner.plan_to(
+            label,
+            position,
+            candidate_count=candidate_count,
+            start_positions=self._current_arm_positions(),
+            max_joint_step_rad=max_joint_step_rad,
+        )
+        final_positions = self._trajectory_final_positions(trajectory)
+        self._execute_planned_arm_trajectory(
+            label,
+            trajectory,
+            completion_timeout_sec=completion_timeout_sec,
+            completion_tolerance_rad=completion_tolerance_rad,
+            completion_max_velocity_rad_sec=completion_max_velocity_rad_sec,
+            cartesian_target=cartesian_target,
+        )
+        return final_positions
 
-    def _move_pose_precisely(self, label: str, position: Sequence[float]) -> None:
+    def _move_joint_target(
+        self,
+        label: str,
+        target_positions: Sequence[float],
+        cartesian_target: Sequence[float],
+    ) -> List[float]:
+        if self.moveit_planner is None:
+            raise RuntimeError("MoveIt planner is not initialized")
+        trajectory = self.moveit_planner.plan_to_joints(label, target_positions)
+        final_positions = self._trajectory_final_positions(trajectory)
+        self._execute_planned_arm_trajectory(
+            label,
+            trajectory,
+            completion_timeout_sec=self.moveit_precise_joint_timeout_sec,
+            completion_tolerance_rad=self.moveit_precise_joint_tolerance_rad,
+            completion_max_velocity_rad_sec=self.moveit_precise_max_velocity,
+            cartesian_target=cartesian_target,
+        )
+        return final_positions
+
+    def _move_pose_precisely(
+        self,
+        label: str,
+        position: Sequence[float],
+        calibrated_joint_target: Optional[Sequence[float]] = None,
+    ) -> None:
         for attempt in range(1, self.moveit_precise_position_attempts + 1):
+            if attempt > 1:
+                retreat = self._offset_z(
+                    position, self.moveit_precise_retry_retreat_m
+                )
+                self.get_logger().warning(
+                    f"{label} remained outside Cartesian tolerance; retreating "
+                    f"{self.moveit_precise_retry_retreat_m:.3f} m before retry"
+                )
+                self._move_pose(f"{label}_retry_retreat_{attempt - 1}", retreat)
             attempt_label = label if attempt == 1 else f"{label}_correction_{attempt - 1}"
-            self._move_pose(attempt_label, position)
+            try:
+                if calibrated_joint_target is not None:
+                    self._move_joint_target(
+                        attempt_label, calibrated_joint_target, position
+                    )
+                else:
+                    self._move_pose(
+                        attempt_label,
+                        position,
+                        candidate_count=self.moveit_grasp_plan_candidates,
+                        max_joint_step_rad=self.moveit_max_grasp_joint_step_rad,
+                        completion_timeout_sec=self.moveit_precise_joint_timeout_sec,
+                        completion_tolerance_rad=self.moveit_precise_joint_tolerance_rad,
+                        completion_max_velocity_rad_sec=self.moveit_precise_max_velocity,
+                        cartesian_target=position,
+                    )
+            except (RuntimeError, TimeoutError) as exc:
+                # A low-height trajectory can stall on contact, and MoveIt can
+                # occasionally return an unnecessarily large IK branch.  Both
+                # are recoverable here: the next attempt first retreats, then
+                # asks for a fresh set of candidate plans.
+                self.get_logger().warning(
+                    f"{attempt_label} descent failed: {exc}; replanning after retreat"
+                )
+                error = float("inf")
+                continue
+            if self.settle_time_sec > 0:
+                self._settle()
+            self.last_arm_goal = self._current_arm_positions()
             measured = self._estimate_grasp_center_position()
             error = self._distance(measured, position)
+            xy_error = math.hypot(
+                float(measured[0]) - float(position[0]),
+                float(measured[1]) - float(position[1]),
+            )
+            z_error = abs(float(measured[2]) - float(position[2]))
             self.get_logger().info(
-                f"{label} Cartesian FK error {error:.3f} m after attempt "
+                f"{label} Cartesian FK error {error:.3f} m "
+                f"(xy={xy_error:.3f}, z={z_error:.3f}) after attempt "
                 f"{attempt}/{self.moveit_precise_position_attempts}"
             )
-            if error <= self.moveit_precise_position_tolerance_m:
+            if (
+                error <= self.moveit_precise_position_tolerance_m
+                and xy_error <= self.grasp_xy_tolerance_m
+                and z_error <= self.grasp_z_tolerance_m
+            ):
                 return
         raise RuntimeError(
             f"Unable to reach {label}: Cartesian FK error {error:.3f} m exceeds "
             f"{self.moveit_precise_position_tolerance_m:.3f} m tolerance"
         )
 
-    def _execute_planned_arm_trajectory(self, label: str, trajectory: JointTrajectory) -> None:
+    def _execute_planned_arm_trajectory(
+        self,
+        label: str,
+        trajectory: JointTrajectory,
+        *,
+        completion_timeout_sec: Optional[float] = None,
+        completion_tolerance_rad: Optional[float] = None,
+        completion_max_velocity_rad_sec: Optional[float] = None,
+        cartesian_target: Optional[Sequence[float]] = None,
+    ) -> None:
         if not trajectory.points:
             raise RuntimeError(f"MoveIt returned an empty trajectory for {label}")
         trajectory.joint_names = list(trajectory.joint_names)
         self._scale_trajectory_time(trajectory, self.moveit_execution_time_scale)
-        self._publish_arm_trajectory(trajectory, label)
+        self._publish_arm_trajectory(
+            trajectory,
+            label,
+            completion_timeout_sec=completion_timeout_sec,
+            completion_tolerance_rad=completion_tolerance_rad,
+            completion_max_velocity_rad_sec=completion_max_velocity_rad_sec,
+            cartesian_target=cartesian_target,
+        )
         self.last_arm_goal = self._current_arm_positions()
 
     def _scale_trajectory_time(self, trajectory: JointTrajectory, scale: float) -> None:
@@ -593,7 +866,12 @@ class PickPlaceNode(Node):
         trajectory.points = [point]
         self._publish_arm_trajectory(trajectory, label)
 
-    def _move_gripper(self, name: str, position: float) -> None:
+    def _move_gripper(
+        self,
+        name: str,
+        position: float,
+        timeout_sec: Optional[float] = None,
+    ) -> None:
         self._validate_positions(
             ["gripper_controller"],
             [position],
@@ -606,6 +884,7 @@ class PickPlaceNode(Node):
             [position],
             self.gripper_duration_sec,
             f"gripper.{name}",
+            timeout_sec=timeout_sec,
         )
 
     def _send_trajectory(
@@ -615,6 +894,7 @@ class PickPlaceNode(Node):
         positions: Iterable[float],
         duration_sec: float,
         label: str,
+        timeout_sec: Optional[float] = None,
     ) -> None:
         trajectory = JointTrajectory()
         trajectory.joint_names = list(joint_names)
@@ -623,25 +903,28 @@ class PickPlaceNode(Node):
         point.time_from_start = Duration(seconds=duration_sec).to_msg()
         trajectory.points = [point]
 
-        self._send_follow_joint_trajectory(client, trajectory, label)
+        self._send_follow_joint_trajectory(
+            client, trajectory, label, timeout_sec=timeout_sec
+        )
 
     def _send_follow_joint_trajectory(
         self,
         client: ActionClient,
         trajectory: JointTrajectory,
         label: str,
+        timeout_sec: Optional[float] = None,
     ) -> None:
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = trajectory
 
         send_future = client.send_goal_async(goal)
-        self._spin_future(send_future, f"send {label}")
+        self._spin_future(send_future, f"send {label}", timeout_sec=timeout_sec)
         goal_handle = send_future.result()
         if not goal_handle or not goal_handle.accepted:
             raise RuntimeError(f"Controller rejected trajectory: {label}")
 
         result_future = goal_handle.get_result_async()
-        self._spin_future(result_future, f"execute {label}")
+        self._spin_future(result_future, f"execute {label}", timeout_sec=timeout_sec)
         wrapped_result = result_future.result()
         status = getattr(wrapped_result, "status", None)
         error_code = wrapped_result.result.error_code
@@ -654,7 +937,16 @@ class PickPlaceNode(Node):
         if self.settle_time_sec > 0:
             self._settle()
 
-    def _publish_arm_trajectory(self, trajectory: JointTrajectory, label: str) -> None:
+    def _publish_arm_trajectory(
+        self,
+        trajectory: JointTrajectory,
+        label: str,
+        *,
+        completion_timeout_sec: Optional[float] = None,
+        completion_tolerance_rad: Optional[float] = None,
+        completion_max_velocity_rad_sec: Optional[float] = None,
+        cartesian_target: Optional[Sequence[float]] = None,
+    ) -> None:
         final_positions = self._trajectory_final_positions(trajectory)
         end_time = self._trajectory_duration_sec(trajectory)
 
@@ -664,14 +956,43 @@ class PickPlaceNode(Node):
             f"duration={end_time:.2f}s, target=[{target}]"
         )
         if len(trajectory.points) > 1:
-            self._follow_arm_trajectory(trajectory)
+            self._follow_arm_trajectory(
+                trajectory,
+                completion_timeout_sec=completion_timeout_sec,
+                completion_tolerance_rad=completion_tolerance_rad,
+                completion_max_velocity_rad_sec=completion_max_velocity_rad_sec,
+                cartesian_target=cartesian_target,
+            )
         else:
-            self._drive_arm_to(final_positions, max(end_time + 3.0, self.action_timeout_sec))
+            self._drive_arm_to(
+                final_positions,
+                completion_timeout_sec
+                if completion_timeout_sec is not None
+                else max(end_time + 3.0, self.action_timeout_sec),
+                tolerance_rad=completion_tolerance_rad,
+                max_velocity_rad_sec=completion_max_velocity_rad_sec,
+                cartesian_target=cartesian_target,
+                cartesian_tolerance_m=(
+                    self.moveit_precise_position_tolerance_m
+                    if cartesian_target is not None
+                    else None
+                ),
+                cartesian_xy_tolerance_m=self.grasp_xy_tolerance_m,
+                cartesian_z_tolerance_m=self.grasp_z_tolerance_m,
+            )
         self.get_logger().info(f"Reached {label}")
         if self.settle_time_sec > 0:
             self._settle()
 
-    def _follow_arm_trajectory(self, trajectory: JointTrajectory) -> None:
+    def _follow_arm_trajectory(
+        self,
+        trajectory: JointTrajectory,
+        *,
+        completion_timeout_sec: Optional[float] = None,
+        completion_tolerance_rad: Optional[float] = None,
+        completion_max_velocity_rad_sec: Optional[float] = None,
+        cartesian_target: Optional[Sequence[float]] = None,
+    ) -> None:
         samples = [(0.0, self._current_arm_positions())]
         for point in trajectory.points:
             positions_by_name = dict(zip(trajectory.joint_names, point.positions))
@@ -684,7 +1005,22 @@ class PickPlaceNode(Node):
                 samples.append((sample_time, positions))
 
         if len(samples) == 1:
-            self._drive_arm_to(samples[0][1], self.action_timeout_sec)
+            self._drive_arm_to(
+                samples[0][1],
+                self.action_timeout_sec
+                if completion_timeout_sec is None
+                else completion_timeout_sec,
+                tolerance_rad=completion_tolerance_rad,
+                max_velocity_rad_sec=completion_max_velocity_rad_sec,
+                cartesian_target=cartesian_target,
+                cartesian_tolerance_m=(
+                    self.moveit_precise_position_tolerance_m
+                    if cartesian_target is not None
+                    else None
+                ),
+                cartesian_xy_tolerance_m=self.grasp_xy_tolerance_m,
+                cartesian_z_tolerance_m=self.grasp_z_tolerance_m,
+            )
             return
 
         start = time.monotonic()
@@ -692,6 +1028,8 @@ class PickPlaceNode(Node):
         command = Float64MultiArray()
         try:
             while True:
+                if not rclpy.ok():
+                    raise KeyboardInterrupt
                 elapsed = time.monotonic() - start
                 if elapsed >= samples[-1][0]:
                     break
@@ -720,14 +1058,30 @@ class PickPlaceNode(Node):
                 self.arm_trajectory_pub.publish(command)
                 rclpy.spin_once(self, timeout_sec=0.02)
         finally:
-            command.data = [0.0] * len(self.joints)
-            self.arm_trajectory_pub.publish(command)
+            if rclpy.ok():
+                command.data = [0.0] * len(self.joints)
+                self.arm_trajectory_pub.publish(command)
 
-        self._drive_arm_to(samples[-1][1], self.action_timeout_sec)
+        self._drive_arm_to(
+            samples[-1][1],
+            self.action_timeout_sec
+            if completion_timeout_sec is None
+            else completion_timeout_sec,
+            tolerance_rad=completion_tolerance_rad,
+            max_velocity_rad_sec=completion_max_velocity_rad_sec,
+            cartesian_target=cartesian_target,
+            cartesian_tolerance_m=(
+                self.moveit_precise_position_tolerance_m
+                if cartesian_target is not None
+                else None
+            ),
+            cartesian_xy_tolerance_m=self.grasp_xy_tolerance_m,
+            cartesian_z_tolerance_m=self.grasp_z_tolerance_m,
+        )
 
     def _settle(self) -> None:
         deadline = time.monotonic() + self.settle_time_sec
-        while time.monotonic() < deadline:
+        while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
 
     def _trajectory_duration_sec(self, trajectory: JointTrajectory) -> float:
@@ -742,21 +1096,73 @@ class PickPlaceNode(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         return False
 
-    def _drive_arm_to(self, target_positions: Sequence[float], timeout_sec: float) -> None:
+    def _drive_arm_to(
+        self,
+        target_positions: Sequence[float],
+        timeout_sec: float,
+        tolerance_rad: Optional[float] = None,
+        max_velocity_rad_sec: Optional[float] = None,
+        cartesian_target: Optional[Sequence[float]] = None,
+        cartesian_tolerance_m: Optional[float] = None,
+        cartesian_xy_tolerance_m: Optional[float] = None,
+        cartesian_z_tolerance_m: Optional[float] = None,
+    ) -> None:
+        tolerance = (
+            self.execution_tolerance_rad
+            if tolerance_rad is None
+            else float(tolerance_rad)
+        )
+        max_velocity = (
+            self.arm_max_velocity
+            if max_velocity_rad_sec is None
+            else min(self.arm_max_velocity, float(max_velocity_rad_sec))
+        )
+        if max_velocity <= 0.0:
+            raise ValueError("arm completion velocity must be positive")
         deadline = time.monotonic() + timeout_sec
         command = Float64MultiArray()
         try:
             while time.monotonic() < deadline:
+                if not rclpy.ok():
+                    raise KeyboardInterrupt
                 errors = [
                     target - self.latest_joint_positions.get(joint, target)
                     for joint, target in zip(self.joints, target_positions)
                 ]
-                if max(abs(error) for error in errors) <= self.execution_tolerance_rad:
+                # For low-height Cartesian work, joint convergence alone is
+                # not success: small joint residuals can still leave the
+                # fingers centimetres from the object.  Only use the joint
+                # threshold as the terminal condition for joint-only moves.
+                if (
+                    cartesian_target is None
+                    and max(abs(error) for error in errors) <= tolerance
+                ):
                     return
+                if cartesian_target is not None and cartesian_tolerance_m is not None:
+                    current_positions = self._current_arm_positions()
+                    measured = self._estimate_grasp_center_position(current_positions)
+                    distance = self._distance(measured, cartesian_target)
+                    xy_error = math.hypot(
+                        float(measured[0]) - float(cartesian_target[0]),
+                        float(measured[1]) - float(cartesian_target[1]),
+                    )
+                    z_error = abs(
+                        float(measured[2]) - float(cartesian_target[2])
+                    )
+                    xy_ok = (
+                        cartesian_xy_tolerance_m is None
+                        or xy_error <= cartesian_xy_tolerance_m
+                    )
+                    z_ok = (
+                        cartesian_z_tolerance_m is None
+                        or z_error <= cartesian_z_tolerance_m
+                    )
+                    if distance <= cartesian_tolerance_m and xy_ok and z_ok:
+                        return
                 command.data = [
                     max(
-                        -self.arm_max_velocity,
-                        min(self.arm_max_velocity, self.arm_velocity_gain * error),
+                        -max_velocity,
+                        min(max_velocity, self.arm_velocity_gain * error),
                     )
                     for error in errors
                 ]
@@ -766,8 +1172,9 @@ class PickPlaceNode(Node):
                 f"Timed out waiting for arm trajectory; final error={self._arm_error(target_positions):.3f} rad"
             )
         finally:
-            command.data = [0.0] * len(self.joints)
-            self.arm_trajectory_pub.publish(command)
+            if rclpy.ok():
+                command.data = [0.0] * len(self.joints)
+                self.arm_trajectory_pub.publish(command)
 
     def _arm_error(self, target_positions: Sequence[float]) -> float:
         errors = [
@@ -783,11 +1190,18 @@ class PickPlaceNode(Node):
         for name, position in zip(msg.name, msg.position):
             self.latest_joint_positions[name] = float(position)
 
-    def _spin_future(self, future: Future, label: str) -> None:
+    def _spin_future(
+        self,
+        future: Future,
+        label: str,
+        timeout_sec: Optional[float] = None,
+    ) -> None:
         rclpy.spin_until_future_complete(
             self,
             future,
-            timeout_sec=self.action_timeout_sec,
+            timeout_sec=(
+                self.action_timeout_sec if timeout_sec is None else timeout_sec
+            ),
         )
         if not future.done():
             raise TimeoutError(f"Timed out while waiting to {label}")
@@ -963,8 +1377,12 @@ class PickPlaceNode(Node):
         transform = self._estimate_gripper_base_transform(self.last_arm_goal)
         return [transform[0][3], transform[1][3], transform[2][3]]
 
-    def _estimate_grasp_center_position(self) -> List[float]:
-        transform = self._estimate_gripper_base_transform(self.last_arm_goal)
+    def _estimate_grasp_center_position(
+        self, arm_positions: Optional[Sequence[float]] = None
+    ) -> List[float]:
+        if arm_positions is None:
+            arm_positions = self.last_arm_goal
+        transform = self._estimate_gripper_base_transform(arm_positions)
         return [
             transform[row][3]
             + sum(

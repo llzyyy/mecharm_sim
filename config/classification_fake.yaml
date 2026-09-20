@@ -14,36 +14,64 @@ manager:
   detection_timeout_sec: 5.0
   command_timeout_sec: 180.0
   minimum_confidence: 0.50
-  max_attempts_per_target: 1
+  # Retry one transient planning/controller miss before declaring a grid failed.
+  max_attempts_per_target: 2
+  # A failed low-height alignment can mean physical contact. Do not repeat the
+  # complete pick automatically, because sustained contact can deform fingers.
+  non_retryable_error_codes: [alignment_failed]
   result_log: ~/.ros/mecharm_sim/classification_manager.jsonl
   target_order: [grid_1, grid_2, grid_3, grid_4, grid_5, grid_6]
 
 # Positions are Gazebo world-frame object-center coordinates in metres.
-# All first-pass objects are 40 mm high, so they share the same grasp Z.
+# Objects are 25 mm high on a table whose top is at Z=0.32 m.
 grids:
-  grid_1: {world_position: [0.12, -0.11, 0.34], reachable: true}
-  grid_2: {world_position: [0.22, -0.11, 0.34], reachable: true}
-  grid_3: {world_position: [0.32, -0.11, 0.34], reachable: true}
-  grid_4: {world_position: [0.12, -0.04, 0.34], reachable: true}
-  grid_5: {world_position: [0.22, -0.04, 0.34], reachable: true}
-  grid_6: {world_position: [0.32, -0.04, 0.34], reachable: true}
+  grid_1:
+    world_position: [0.21, -0.12, 0.3325]
+    grasp_joint_target: [-0.532, 0.847, 0.130, -0.237, -0.134, 0.120]
+    reachable: true
+  grid_2:
+    world_position: [0.28, -0.12, 0.3325]
+    grasp_joint_target: [-0.469, 1.536, -1.287, 0.232, 0.675, -0.460]
+    reachable: true
+  grid_3:
+    world_position: [0.21, -0.05, 0.3325]
+    grasp_joint_target: [-0.207, 0.743, 0.433, 0.040, -0.358, 0.126]
+    reachable: true
+  grid_4:
+    world_position: [0.28, -0.05, 0.3325]
+    grasp_joint_target: [-0.168, 1.286, -0.837, -0.006, 0.486, -0.002]
+    reachable: true
+  # Compensate the visual finger-centre residual at this arm angle.  This is a
+  # calibrated grasp-path target, not a change to the perceived object pose.
+  grid_5:
+    world_position: [0.21, 0.02, 0.3325]
+    grasp_target_offset: [-0.003, -0.020, -0.0025]
+    grasp_joint_target: [0.081, 0.679, 0.498, 0.300, -0.320, -0.049]
+    reachable: true
+  grid_6:
+    world_position: [0.28, 0.02, 0.3325]
+    # Measured successful runs leave the finger centre about (+3, 0, +3) mm
+    # from this grid centre, so trim only the commanded grasp path.
+    grasp_target_offset: [-0.003, 0.000, -0.003]
+    grasp_joint_target: [0.136, 1.233, -0.757, -0.233, 0.515, 0.428]
+    reachable: true
 
 # Each bin has one reference coordinate and three non-overlapping drop slots.
 bins:
   cube_bin:
     class_name: cube
-    world_position: [0.12, 0.15, 0.34]
-    drop_offsets: [[0.0, -0.035, 0.0], [0.0, 0.0, 0.0], [0.0, 0.035, 0.0]]
+    world_position: [0.20, 0.13, 0.3325]
+    drop_offsets: [[-0.04, 0.0, 0.0], [0.0, 0.0, 0.0], [0.04, 0.0, 0.0]]
   cylinder_bin:
     class_name: cylinder
-    world_position: [0.32, 0.15, 0.34]
-    drop_offsets: [[0.0, -0.035, 0.0], [0.0, 0.0, 0.0], [0.0, 0.035, 0.0]]
+    world_position: [0.20, 0.19, 0.3325]
+    drop_offsets: [[-0.04, 0.0, 0.0], [0.0, 0.0, 0.0], [0.04, 0.0, 0.0]]
 
 objects:
   - model_name: cube_1
     class_name: cube
     grid_id: grid_1
-    initial_position: [0.12, -0.11, 0.34]
+    initial_position: [0.21, -0.12, 0.3325]
     attach_topic: /classification/cube_1/attach
     detach_topic: /classification/cube_1/detach
     table_attach_topic: /classification/cube_1/table_attach
@@ -51,7 +79,7 @@ objects:
   - model_name: cylinder_1
     class_name: cylinder
     grid_id: grid_2
-    initial_position: [0.22, -0.11, 0.34]
+    initial_position: [0.28, -0.12, 0.3325]
     attach_topic: /classification/cylinder_1/attach
     detach_topic: /classification/cylinder_1/detach
     table_attach_topic: /classification/cylinder_1/table_attach
@@ -59,7 +87,7 @@ objects:
   - model_name: cube_2
     class_name: cube
     grid_id: grid_3
-    initial_position: [0.32, -0.11, 0.34]
+    initial_position: [0.21, -0.05, 0.3325]
     attach_topic: /classification/cube_2/attach
     detach_topic: /classification/cube_2/detach
     table_attach_topic: /classification/cube_2/table_attach
@@ -67,7 +95,7 @@ objects:
   - model_name: cylinder_2
     class_name: cylinder
     grid_id: grid_4
-    initial_position: [0.12, -0.04, 0.34]
+    initial_position: [0.28, -0.05, 0.3325]
     attach_topic: /classification/cylinder_2/attach
     detach_topic: /classification/cylinder_2/detach
     table_attach_topic: /classification/cylinder_2/table_attach
@@ -75,7 +103,7 @@ objects:
   - model_name: cube_3
     class_name: cube
     grid_id: grid_5
-    initial_position: [0.22, -0.04, 0.34]
+    initial_position: [0.21, 0.02, 0.3325]
     attach_topic: /classification/cube_3/attach
     detach_topic: /classification/cube_3/detach
     table_attach_topic: /classification/cube_3/table_attach
@@ -83,7 +111,7 @@ objects:
   - model_name: cylinder_3
     class_name: cylinder
     grid_id: grid_6
-    initial_position: [0.32, -0.04, 0.34]
+    initial_position: [0.28, 0.02, 0.3325]
     attach_topic: /classification/cylinder_3/attach
     detach_topic: /classification/cylinder_3/detach
     table_attach_topic: /classification/cylinder_3/table_attach
@@ -96,9 +124,14 @@ controller:
   gripper_controller_name: gripper_action_controller
   result_log: ~/.ros/mecharm_sim/classification_results.csv
   action_timeout_sec: 20.0
+  # Gazebo can need one slow settling cycle for the first gripper goal.
+  initialization_action_timeout_sec: 35.0
   settle_time_sec: 0.7
   default_arm_duration_sec: 8.0
-  default_gripper_duration_sec: 1.2
+  # Close slowly so contact does not shock the coupled finger joints.
+  default_gripper_duration_sec: 2.0
+  # Coarse trajectory completion uses the controller's proven tolerance; the
+  # grasp itself is subsequently corrected and checked in Cartesian space.
   execution_tolerance_rad: 0.13
   arm_velocity_gain: 1.5
   arm_max_velocity_rad_sec: 0.45
@@ -140,17 +173,24 @@ controller:
     a_pick: [-0.2662, 1.1479, -0.2328, 0.0018, -0.0975, 0.0]
     b_above: [0.7266, 0.6396, -0.1172, 0.0003, -0.0025, 0.0]
     b_place: [0.7267, 1.1283, -0.3129, 0.0017, -0.0815, 0.0]
-  gripper: {open: 0.10, closed: -0.14}
+  # Stop near the measured 25 mm contact position.  Driving toward 0.00 rad
+  # keeps loading the passive mimic joints and visibly deforms the gripper.
+  gripper: {open: 0.12, closed: 0.075}
   scene:
     ball_position: [0.12, -0.11, 0.34]
     reset_ball_each_attempt: false
     place_position: [0.12, 0.15, 0.34]
     grasp_tolerance_m: 0.012
     grasp_xy_tolerance_m: 0.008
-    grasp_z_tolerance_m: 0.008
-    approach_height_m: 0.115
-    grasp_center_height_offset_m: 0.0
-    place_center_height_offset_m: 0.0
+    # The finger pads overlap the 25 mm objects across this vertical residual;
+    # keep XY strict while allowing the observed 9 mm high approach to close.
+    grasp_z_tolerance_m: 0.012
+    approach_height_m: 0.090
+    # Grip the upper half of the 25 mm object so the gripper palm clears it.
+    grasp_center_height_offset_m: 0.0075
+    # Release 10 mm above the table and let physics settle the object; driving
+    # the attached collision body to exact table contact stalls the arm.
+    place_center_height_offset_m: 0.0175
     release_tolerance_m: 0.015
     max_place_corrections: 2
     placement_tolerance_m: 0.045
@@ -162,13 +202,33 @@ controller:
     base_frame: world
     end_effector_link: gripper_base
     position_tolerance_m: 0.004
-    orientation_tolerance_rad: 0.08
-    target_point_offset: [0.0, 0.057, 0.0]
-    wrist_joint_tolerances_rad: [0.35, 0.90, 0.35]
+    orientation_tolerance_rad: 0.15
+    # The adaptive gripper finger center is 57 mm along gripper_base +Y.
+    # +3 mm in gripper_base X shifts the observed finger centre slightly left.
+    target_point_offset: [0.003, 0.057, 0.0]
+    wrist_joint_tolerances_rad: [0.35, 0.90, 0.50]
     planning_time_sec: 8.0
     planning_attempts: 10
     velocity_scale: 0.10
     acceleration_scale: 0.10
     execution_time_scale: 1.5
-    precise_position_tolerance_m: 0.008
+    # Use the same total-distance limit as the final pre-close check. The
+    # controller also enforces the stricter per-axis XY/Z 8 mm limits here.
+    precise_position_tolerance_m: 0.012
     precise_position_attempts: 3
+    precise_joint_tolerance_rad: 0.05
+    # Never keep driving a low grasp pose for the general 20 s action timeout.
+    # If refinement misses, lift clear before planning another descent.
+    precise_joint_timeout_sec: 3.0
+    # Limit only the final low-height correction. Normal free-space trajectory
+    # tracking keeps the controller-wide velocity limit.
+    precise_max_velocity_rad_sec: 0.12
+    # The six calibrated grasp targets came from a successful full sequence;
+    # do not let MoveIt stop at the former +/-0.01 rad edge of that target.
+    calibrated_joint_tolerance_rad: 0.003
+    precise_retry_retreat_m: 0.090
+    # Sample several IK branches only for low-height grasp descents, then use
+    # the compact branch. Reject large single-joint moves that have repeatedly
+    # stalled against the table in otherwise valid Cartesian plans.
+    grasp_plan_candidates: 3
+    max_grasp_joint_step_rad: 1.0

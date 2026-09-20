@@ -66,7 +66,11 @@ class ClassificationPickPlaceNode(PickPlaceNode):
                     "initial detach",
                     str(target["model_name"]),
                 )
-            self._move_gripper("open", self.gripper_open)
+            self._move_gripper(
+                "open",
+                self.gripper_open,
+                timeout_sec=self.initialization_action_timeout_sec,
+            )
             self._move_arm("home")
         except Exception as exc:
             self.get_logger().error(f"Failed to initialize classification controller: {exc}")
@@ -231,6 +235,23 @@ class ClassificationPickPlaceNode(PickPlaceNode):
     def pick_object(self, target: Dict[str, Any]) -> None:
         """Pick the current model using a configured fixed grid coordinate."""
         configured_position = self._vector3(target["pick_position"], "pick_position")
+        grid_id = str(target["grid_id"])
+        grasp_target_offset = self._vector3(
+            self.config["grids"][grid_id].get(
+                "grasp_target_offset", [0.0, 0.0, 0.0]
+            ),
+            f"{grid_id}.grasp_target_offset",
+        )
+        calibrated_joint_target = self.config["grids"][grid_id].get(
+            "grasp_joint_target"
+        )
+        if calibrated_joint_target is not None:
+            calibrated_joint_target = [float(value) for value in calibrated_joint_target]
+            if len(calibrated_joint_target) != len(self.joints):
+                raise CommandError(
+                    "invalid_command",
+                    f"{grid_id}.grasp_joint_target must contain {len(self.joints)} values",
+                )
         measured_position = self._require_entity_position(self.target_model)
         start_error = self._distance(measured_position, configured_position)
         if start_error > self.target_start_tolerance_m:
@@ -244,17 +265,32 @@ class ClassificationPickPlaceNode(PickPlaceNode):
         self._move_gripper("open", self.gripper_open)
         if self.use_moveit:
             assert self.moveit_planner is not None
-            above = self._offset_z(configured_position, self.approach_height_m)
-            grasp = self._offset_z(
-                configured_position, self.grasp_center_height_offset_m
+            above = add_vectors(
+                self._offset_z(configured_position, self.approach_height_m),
+                grasp_target_offset,
+            )
+            grasp = add_vectors(
+                self._offset_z(
+                    configured_position, self.grasp_center_height_offset_m
+                ),
+                grasp_target_offset,
             )
             self.moveit_planner.lock_tool_pose(
                 self._estimate_gripper_base_orientation(self.poses["a_pick"]),
                 self.poses["a_pick"],
             )
             self._move_pose(f"{self.target_model}_approach", above)
-            self._move_pose_precisely(f"{self.target_model}_grasp", grasp)
-            self._ensure_grasp_alignment(measured_position)
+            self._move_pose_precisely(
+                f"{self.target_model}_grasp",
+                grasp,
+                calibrated_joint_target=calibrated_joint_target,
+            )
+            # The per-grid offset calibrates the visible finger centre, which
+            # is not identical to the nominal MoveIt target point at every
+            # wrist angle.  Verify that the arm reached that calibrated point.
+            self._ensure_grasp_alignment(
+                add_vectors(measured_position, grasp_target_offset)
+            )
         else:
             # Joint-space fallback is retained from pick-ball and requires
             # per-grid calibration before it is suitable for all six grids.
@@ -267,7 +303,7 @@ class ClassificationPickPlaceNode(PickPlaceNode):
         if self.use_moveit:
             self._move_pose(
                 f"{self.target_model}_lift",
-                self._offset_z(configured_position, self.approach_height_m),
+                above,
             )
         else:
             self._move_arm("a_above", safe_move=True)
@@ -338,6 +374,8 @@ class ClassificationPickPlaceNode(PickPlaceNode):
         if isinstance(error, CommandError):
             return error.error_code
         text = str(error).lower()
+        if "cartesian fk error" in text or "grasp is not centered" in text:
+            return "alignment_failed"
         if "failed to plan" in text or "unable to reach" in text:
             return "unreachable"
         return {
@@ -372,7 +410,8 @@ def main(args=None) -> None:
             node.process_next_command()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
     raise SystemExit(exit_code)
 
 

@@ -63,6 +63,11 @@ def validate_classification_config(config: Dict[str, Any]) -> None:
             raise ValueError(f"Missing destination bin for class '{class_name}'")
         _require_vector3(target["initial_position"], f"{target['model_name']}.initial_position")
         _require_vector3(grids[grid_id]["world_position"], f"{grid_id}.world_position")
+        if "grasp_target_offset" in grids[grid_id]:
+            _require_vector3(
+                grids[grid_id]["grasp_target_offset"],
+                f"{grid_id}.grasp_target_offset",
+            )
         for topic_key in (
             "attach_topic",
             "detach_topic",
