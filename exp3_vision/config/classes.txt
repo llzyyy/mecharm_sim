@@ -1,0 +1,4 @@
+phone
+cup
+plug
+cube
